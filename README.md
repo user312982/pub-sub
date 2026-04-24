@@ -100,7 +100,92 @@ A high-performance **event aggregation service** built with Python and FastAPI. 
 - [Docker](https://docs.docker.com/get-docker/) installed on your machine
 - (Optional) Python 3.11+ for local development
 
-### Local Development
+### 🚀 Recommended: Docker Compose (Full Demo)
+
+This is the **recommended way to run** the project for review or demonstration. It starts both services and simulates the full workflow automatically.
+
+```bash
+# Clone the repository
+git clone https://github.com/your-username/uts-aggregator.git
+cd uts-aggregator
+
+# Build & start all services
+docker compose up --build
+```
+
+**What happens automatically:**
+
+```
+Step 1: aggregator service starts → health check every 5s
+Step 2: publisher service starts (after aggregator is healthy)
+Step 3: Publisher sends 6,000 events (5,000 unique + 1,000 duplicates)
+Step 4: Console output shows real-time progress
+Step 5: Publisher exits, aggregator continues running
+```
+
+**Expected console output:**
+```
+aggregator-1  | INFO:     Started server on 0.0.0.0:8080
+publisher-1   | Generating 6000 events (5000 unique + 1000 duplicates)...
+publisher-1   | Sending 6000 events...
+publisher-1   |   1000/6000 events (1245/s)
+publisher-1   |   2000/6000 events (1890/s)
+publisher-1   |   ...
+publisher-1   | Sent 6000 events in 0.87s (6896 events/s)
+publisher-1   | Stats: {"received":6000, "unique_processed":5000, "duplicate_dropped":1000, ...}
+publisher-1   | Unique events stored: 5000
+```
+
+**Verify the results in another terminal:**
+```bash
+# Check real-time statistics
+curl http://localhost:8080/stats
+
+# Query processed events by topic
+curl http://localhost:8080/events?topic=orders
+
+# Query all events
+curl http://localhost:8080/events
+
+# Interactive API documentation
+open http://localhost:8080/docs
+```
+
+**Stop all services:**
+```bash
+docker compose down
+```
+
+---
+
+### 📦 Option 2: Docker Only (Single Service)
+
+Run just the aggregator without the automated publisher. Useful for manual API testing.
+
+```bash
+# Build the image
+docker build -t uts-aggregator .
+
+# Run the container (aggregator only)
+docker run -p 8080:8080 uts-aggregator
+```
+
+Then send events manually:
+```bash
+# Single event
+curl -X POST http://localhost:8080/publish \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"orders","event_id":"ord-001","timestamp":"2024-01-01T00:00:00Z","source":"order-svc","payload":{"order_id":123}}'
+
+# Batch events
+curl -X POST http://localhost:8080/publish \
+  -H "Content-Type: application/json" \
+  -d '[{"topic":"orders","event_id":"ord-001","timestamp":"2024-01-01T00:00:00Z","source":"svc","payload":{}}]'
+```
+
+---
+
+### 🛠️ Option 3: Local Development (No Docker)
 
 ```bash
 # Clone the repository
@@ -118,44 +203,8 @@ pip install -r requirements.txt
 uvicorn src.main:app --reload --port 8080
 ```
 
-The server will be available at `http://localhost:8080`.  
+The server will be available at `http://localhost:8080`.
 Interactive API docs at `http://localhost:8080/docs`.
-
-### Docker (Required)
-
-Build and run the service inside a Docker container:
-
-```bash
-# Build the image
-docker build -t uts-aggregator .
-
-# Run the container
-docker run -p 8080:8080 uts-aggregator
-```
-
-### Docker Compose (Bonus)
-
-Start both **aggregator** and **publisher** services with a single command. The publisher automatically sends **6,000 events** (5,000 unique + 1,000 duplicates) to demonstrate deduplication.
-
-```bash
-docker compose up --build
-```
-
-**What happens:**
-1. `aggregator` service starts and runs a health check every 5 seconds
-2. Once healthy, `publisher` service starts
-3. Publisher sends 6,000 events to the aggregator
-4. Results are printed to the console
-5. Aggregator continues running for manual querying
-
-```bash
-# In another terminal, check the results
-curl http://localhost:8080/stats
-curl http://localhost:8080/events?topic=orders
-
-# Stop all services
-docker compose down
-```
 
 ---
 
