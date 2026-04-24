@@ -7,23 +7,23 @@ Sistem aggregator event berbasis Python (FastAPI + asyncio) yang menerima event 
 ### Arsitektur Sistem
 
 ```
-┌────────────┐     POST /publish     ┌──────────────────┐
-│  Publisher  │ ──────────────────►  │   FastAPI App     │
-│ (curl/test) │                      │   (HTTP Server)   │
-└────────────┘                      └────────┬─────────┘
+┌─────────────┐     POST /publish    ┌──────────────────┐
+│  Publisher  │ ──────────────────►  │   FastAPI App    │
+│ (curl/test) │                      │   (HTTP Server)  │
+└─────────────┘                      └────────┬─────────┘
                                               │
                                        asyncio.Queue
                                               │
                                       ┌───────▼────────┐
-                                      │   Consumer      │
-                                      │  (background)   │
-                                      └───┬─────────┬───┘
+                                      │   Consumer     │
+                                      │  (background)  │
+                                      └───┬─────────┬──┘
                                           │         │
                                    INSERT OR IGNORE │
                                           │         │
                                     ┌─────▼──┐  ┌──▼──────────┐
-                                    │ SQLite  │  │ Stats       │
-                                    │ (dedup) │  │ (in-memory) │
+                                    │ SQLite │  │ Stats       │
+                                    │ (dedup)│  │ (in-memory) │
                                     └────────┘  └─────────────┘
 ```
 
