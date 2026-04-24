@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class TestAPI:
@@ -6,7 +6,7 @@ class TestAPI:
         event = {
             "topic": "orders",
             "event_id": "ord-001",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "source": "svc",
             "payload": {"order": 1},
         }
@@ -24,7 +24,7 @@ class TestAPI:
             client.post("/publish", json={
                 "topic": f"topic-{i}",
                 "event_id": f"evt-{i:03d}",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "source": "svc",
                 "payload": {"i": i},
             })
@@ -34,9 +34,9 @@ class TestAPI:
 
     def test_stats_consistency_after_publish(self, client):
         events = [
-            {"topic": "t1", "event_id": "e1", "timestamp": datetime.utcnow().isoformat(), "source": "s", "payload": {}},
-            {"topic": "t1", "event_id": "e2", "timestamp": datetime.utcnow().isoformat(), "source": "s", "payload": {}},
-            {"topic": "t2", "event_id": "e3", "timestamp": datetime.utcnow().isoformat(), "source": "s", "payload": {}},
+            {"topic": "t1", "event_id": "e1", "timestamp": datetime.now(timezone.utc).isoformat(), "source": "s", "payload": {}},
+            {"topic": "t1", "event_id": "e2", "timestamp": datetime.now(timezone.utc).isoformat(), "source": "s", "payload": {}},
+            {"topic": "t2", "event_id": "e3", "timestamp": datetime.now(timezone.utc).isoformat(), "source": "s", "payload": {}},
         ]
         for ev in events:
             client.post("/publish", json=ev)

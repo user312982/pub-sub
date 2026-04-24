@@ -1,6 +1,6 @@
 import tempfile
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -18,7 +18,7 @@ async def test_dedup_rejects_duplicate():
         event = Event(
             topic="test",
             event_id="dup-001",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             source="svc",
             payload={"data": 1},
         )
@@ -37,11 +37,11 @@ async def test_same_event_id_different_topics():
     try:
         event_a = Event(
             topic="orders", event_id="same-id",
-            timestamp=datetime.utcnow(), source="svc", payload={},
+            timestamp=datetime.now(timezone.utc), source="svc", payload={},
         )
         event_b = Event(
             topic="payments", event_id="same-id",
-            timestamp=datetime.utcnow(), source="svc", payload={},
+            timestamp=datetime.now(timezone.utc), source="svc", payload={},
         )
         assert await store.store_event(event_a) is True
         assert await store.store_event(event_b) is True
@@ -58,7 +58,7 @@ async def test_dedup_persistence_across_restart():
         store1 = DedupStore(tmp)
         event = Event(
             topic="test", event_id="persist-001",
-            timestamp=datetime.utcnow(), source="svc",
+            timestamp=datetime.now(timezone.utc), source="svc",
             payload={"msg": "hello"},
         )
         assert await store1.store_event(event) is True
@@ -84,7 +84,7 @@ async def test_consumer_dedup_integration():
     try:
         event = Event(
             topic="test", event_id="int-001",
-            timestamp=datetime.utcnow(), source="svc", payload={},
+            timestamp=datetime.now(timezone.utc), source="svc", payload={},
         )
         await consumer.publish(event)
         await consumer.publish(event)

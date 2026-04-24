@@ -4,7 +4,7 @@ import random
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiohttp
 
@@ -16,7 +16,7 @@ def generate_event(seq: int) -> dict:
     return {
         "topic": random.choice(TOPICS),
         "event_id": str(uuid.uuid4()),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "source": random.choice(SOURCES),
         "payload": {"seq": seq, "data": f"payload-{seq}"},
     }

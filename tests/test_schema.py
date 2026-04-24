@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -8,7 +8,7 @@ class TestSchema:
         event = {
             "topic": "orders",
             "event_id": "ord-001",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "source": "order-service",
             "payload": {"order_id": 123},
         }
@@ -21,7 +21,7 @@ class TestSchema:
     def test_missing_topic_field(self, client):
         event = {
             "event_id": "evt-001",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "source": "test",
             "payload": {},
         }
@@ -31,7 +31,7 @@ class TestSchema:
     def test_missing_event_id_field(self, client):
         event = {
             "topic": "test",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "source": "test",
             "payload": {},
         }

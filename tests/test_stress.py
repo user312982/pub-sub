@@ -2,7 +2,7 @@ import asyncio
 import os
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -28,7 +28,7 @@ async def test_stress_5000_events_with_duplicates():
             events.append({
                 "topic": "stress",
                 "event_id": f"str-{i:05d}",
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc),
                 "source": "stress-test",
                 "payload": {"seq": i},
             })
