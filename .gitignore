@@ -173,3 +173,7 @@ Thumbs.db
 
 # Runtime data
 data/
+
+# Video script (internal only)
+script.md
+task.md
