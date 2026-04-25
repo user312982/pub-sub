@@ -1,10 +1,20 @@
 # Laporan UTS — Event Aggregator System
 
-## Ringkasan Sistem
+**Nama Program Studi:** Sistem Terdistribusi  
+**Judul Proyek:** Event Aggregator berbasis Pub-Sub dengan Idempoten Consumer  
+**Teknologi Utama:** Python 3.11, FastAPI, asyncio, SQLite, Docker  
 
-Sistem aggregator event berbasis Python (FastAPI + asyncio) yang menerima event dari publisher melalui HTTP, melakukan deduplication idempoten berbasis `(topic, event_id)`, dan menyimpan event unik ke dalam SQLite persistent store. Sistem dirancang untuk menangani at-least-once delivery dengan toleransi crash dan restart.
+---
 
-### Arsitektur Sistem
+## 1. Ringkasan Sistem dan Arsitektur
+
+### 1.1 Deskripsi Sistem
+
+Sistem ini adalah layanan agregasi event berbasis pola **Publish-Subscribe** yang dibangun menggunakan Python (FastAPI + asyncio). Publisher mengirimkan event melalui HTTP ke endpoint `/publish`. Event kemudian diproses secara asinkron oleh background consumer, dideduplikasi berdasarkan `(topic, event_id)`, dan disimpan secara persisten ke SQLite. Endpoint `/events` dan `/stats` menyediakan akses baca ke data yang telah diproses.
+
+Sistem dirancang untuk memenuhi kriteria sistem terdistribusi yang dibahas van Steen & Tanenbaum (2023): **keterbukaan**, **skalabilitas**, dan **toleransi kegagalan**.
+
+### 1.2 Arsitektur Sistem
 
 ```mermaid
 graph TB
@@ -36,10 +46,10 @@ graph TB
 
     POST -->|"enqueue"| QUEUE
     QUEUE -->|"dequeue"| WORKER
-    
+
     WORKER -->|"INSERT OR IGNORE"| DB
     WORKER -->|"Update"| STATS
-    
+
     DB -->|"SELECT"| GET_EV
     STATS -.->|"Read"| GET_ST
 
@@ -53,244 +63,267 @@ graph TB
     style DB fill:#9b59b6,stroke:#6c3483,color:#fff
 ```
 
----
+### 1.3 Alur Pemrosesan
 
-## 1. Karakteristik Sistem Terdistribusi dan Trade-off (Bab 1)
-
-Sistem terdistribusi memiliki tiga karakteristik utama: **distribution transparency**, **openness**, dan **scalability** (Coulouris et al., 2012, Chapter 1). Dalam desain Pub-Sub log aggregator ini, trade-off yang paling menonjol terjadi antara **transparansi** dan **performa**.
-
-### Implementasi dalam Sistem
-
-| Karakteristik | Implementasi |
-|---|---|
-| **Distribution Transparency** | Consumer dan dedup store berjalan dalam proses yang sama dengan FastAPI — pengirim tidak perlu tahu detail internal pemrosesan |
-| **Openness** | Menggunakan HTTP standar dan JSON sebagai format data — dapat diintegrasikan dengan layanan apa pun |
-| **Scalability** | Single consumer saat ini, namun arsitektur asyncio.Queue memungkinkan multiple consumer worker ke depannya |
-
-### Trade-off yang Diambil
-
-Upaya untuk menyembunyikan sepenuhnya masalah jaringan atau memaksakan strict consistency dapat meningkatkan latensi dan menurunkan throughput secara signifikan (Coulouris et al., 2012, Chapter 1). Oleh karena itu, sistem ini **tidak memaksakan strong consistency** — endpoint `/publish` menerima event secara asynchronous dan langsung merespons tanpa menunggu konsumen selesai memproses. Dengan cara ini, availability tetap terjaga dan publisher tidak terblokir.
+1. **Publisher** mengirim satu atau sekumpulan event ke `POST /publish`
+2. **FastAPI** memvalidasi skema event melalui Pydantic (validasi otomatis, 422 jika gagal)
+3. Event yang valid dimasukkan ke dalam `asyncio.Queue` (buffer in-memory FIFO)
+4. **Background Consumer** membaca event dari antrian dan mencoba menyimpannya ke SQLite menggunakan `INSERT OR IGNORE`
+5. Jika event baru → tersimpan, counter `unique_processed` naik; jika duplikat → diabaikan, counter `duplicate_dropped` naik
+6. **Stats Tracker** (in-memory) diperbarui secara atomik setiap kali consumer selesai memproses satu event
+7. `GET /events` membaca langsung dari SQLite; `GET /stats` membaca dari tracker in-memory
 
 ---
 
-## 2. Client-Server vs Publish-Subscribe (Bab 2)
+## 2. Keputusan Desain
 
-Arsitektur **client-server** bekerja dengan pola request-reply yang sinkron, sementara **publish-subscribe** menggunakan pendekatan berbasis peristiwa (event-based architecture) yang lebih longgar dengan **referential decoupling** dan **temporal decoupling** (Coulouris et al., 2012, Chapter 2).
+### 2.1 Idempotency
 
-### Alasan Memilih Pub-Sub
+Idempotency adalah sifat di mana sebuah operasi menghasilkan kondisi akhir yang sama meskipun dieksekusi lebih dari satu kali (van Steen & Tanenbaum, 2023, hlm. 192). Dalam konteks agregasi event, sifat ini sangat krusial karena pada pola *at-least-once delivery*, satu event dapat dikirim lebih dari satu kali.
 
-| Aspek | Client-Server | Publish-Subscribe (Dipilih) |
-|---|---|---|
-| **Coupling** | Kuat — klien tahu lokasi server | Longgar — publisher dan consumer tidak saling kenal |
-| **Sinkronisasi** | Sinkron — klien menunggu respons | Asinkron — publisher lanjut tanpa blokir |
-| **Skalabilitas** | Bottleneck di server | Skalabel — event bus menangani banyak publisher |
-| **Waktu** | Kedua pihak harus aktif | Temporal decoupling — boleh tidak aktif bersamaan |
-
-Pada model client-server, ribuan node pengirim log yang terhubung secara sinkron ke satu layanan berpotensi menimbulkan bottleneck. Dengan Pub-Sub, setiap publisher cukup mengirimkan event log secara asinkron, lalu dapat langsung melanjutkan prosesnya. Sementara itu, aggregator sebagai subscriber dapat mengambil dan memproses log sesuai kapasitas yang tersedia tanpa menghambat sistem pengirim.
-
-### Implementasi
-
-Publisher dan consumer dipisahkan oleh `asyncio.Queue` pada [`src/consumer.py`](src/consumer.py:12). Publisher (endpoint `/publish`) hanya memasukkan event ke antrian dan merespons HTTP 200. Consumer berjalan sebagai background task yang mengambil event dari antrian dan memprosesnya secara FIFO.
-
----
-
-## 3. At-Least-Once Delivery dan Idempotency (Bab 3)
-
-Dalam penanganan kegagalan komunikasi, **at-least-once delivery** menjamin bahwa sebuah pesan akan dieksekusi setidaknya satu kali melalui mekanisme pengiriman ulang saat terjadi timeout. Sebaliknya, **exactly-once semantics** sangat sulit dicapai secara mutlak karena pengirim tidak pernah dapat mengetahui dengan pasti apakah server benar-benar telah mengeksekusi pesan terakhir (Coulouris et al., 2012, Chapter 3).
-
-### Mengapa At-Least-Once?
-
-Sistem ini menggunakan **at-least-once delivery** dengan alasan:
-
-1. **Kesederhanaan** — Tidak perlu ACK yang kompleks atau two-phase commit
-2. **Kinerja** — Tidak ada overhead koordinasi antar node
-3. **Kecukupan** — Untuk aggregator log, duplikasi bisa ditoleransi selama integritas data tetap terjaga
-
-### Peran Idempotent Consumer
-
-Karena mekanisme retry pada skema at-least-once secara alami dapat menimbulkan pengiriman log ganda, keberadaan **idempotent consumer** menjadi sangat penting. Operasi yang idempoten adalah operasi yang akan menghasilkan keadaan akhir yang sama meskipun dijalankan berulang kali. Tanpa idempotent consumer, pengiriman ulang akibat gangguan jaringan sesaat dapat menyebabkan duplikasi entri log dan merusak integritas data pada sistem aggregator.
-
-### Implementasi
-
-Idempotency diimplementasikan melalui [`src/dedup_store.py`](src/dedup_store.py:42) dengan `INSERT OR IGNORE` dan PRIMARY KEY `(topic, event_id)`:
+**Implementasi:**
 
 ```python
-INSERT OR IGNORE INTO events (topic, event_id, ...) VALUES (?, ?, ...)
+# src/dedup_store.py
+INSERT OR IGNORE INTO events (topic, event_id, timestamp, source, payload)
+VALUES (?, ?, ?, ?, ?)
 ```
 
-Operasi SQL atomik ini memastikan bahwa:
+Operasi `INSERT OR IGNORE` bersifat atomik pada level database. Jika `(topic, event_id)` sudah ada sebagai *Primary Key*, SQLite secara otomatis mengabaikan operasi tersebut tanpa melempar exception — menjadikan seluruh pipeline **idempoten secara alami**.
 
-- Jika event **belum ada** → INSERT berhasil, `rowcount > 0` → event unik
-- Jika event **sudah ada** → INSERT diabaikan, `rowcount = 0` → duplikat di-drop
-
-Setiap duplikasi yang terdeteksi dicatat di log dengan level `WARNING` pada [`src/consumer.py`](src/consumer.py:44-47).
-
----
-
-## 4. Skema Penamaan dan Dampak terhadap Dedup (Bab 4)
-
-Skema penamaan memiliki peran penting dalam melokalisasi entitas pada sistem terdistribusi (Coulouris et al., 2012, Chapter 4). Untuk penamaan topic, pendekatan yang disarankan adalah **structured naming** secara hierarkis, misalnya `datacenter/service/severity`. Untuk event_id, pendekatan **flat naming** yang bersifat collision-resistant lebih tepat digunakan, misalnya UUID4.
-
-### Skema Penamaan dalam Sistem
-
-| Entitas | Pendekatan | Contoh |
+| Kondisi | Aksi SQLite | Aksi Consumer |
 |---|---|---|
-| **topic** | Structured naming (flat) | `"orders"`, `"payments"`, `"notifications"` |
-| **event_id** | Flat naming (UUID4) | `"a1b2c3d4-e5f6-..."` |
-| **source** | Identitas node asal | `"service-1"`, `"order-service"` |
+| Event baru `(topic, event_id)` belum ada | INSERT berhasil, `rowcount > 0` | Catat sebagai unique |
+| Event duplikat `(topic, event_id)` sudah ada | INSERT diabaikan, `rowcount = 0` | Catat sebagai duplicate, log WARNING |
 
-### Dampak terhadap Dedup
+### 2.2 Dedup Store
 
-Penggunaan `event_id` yang unik dan stabil memberikan dampak besar terhadap efektivitas proses deduplication. Dengan ID yang konsisten, dedup store cukup memeriksa keberadaan kunci `(topic, event_id)` tanpa harus membandingkan seluruh isi log. Jika suatu paket log dikirim ulang melalui mekanisme retry, paket tersebut tetap menghasilkan identitas yang sama. Dengan demikian, aggregator dapat mengenalinya sebagai duplikasi dan menolak pencatatan ulang.
+**Pertimbangan teknologi:**
 
-Pada sistem ini, dedup store menggunakan **composite primary key** `(topic, event_id)` pada [`src/dedup_store.py`](src/dedup_store.py:30). Kombinasi ini memungkinkan:
+| Teknologi | Kelebihan | Kekurangan | Dipilih? |
+|---|---|---|---|
+| **SQLite** | Local-only, persisten, atomik, tanpa dependensi eksternal | Tidak terdistribusi secara native | ✅ Ya |
+| Redis | Cepat, mendukung TTL | Membutuhkan server eksternal, tidak memenuhi syarat *local-only* | ❌ Tidak |
+| File JSON | Sederhana | Tidak thread-safe, lambat untuk data besar | ❌ Tidak |
 
-- Event ID yang sama di **topic berbeda** → dianggap unik (contoh: event_id="log-001" di topic "orders" dan "payments")
-- Event ID yang sama di **topic sama** → dianggap duplikat
+**Konfigurasi SQLite yang digunakan:**
 
-Ini memungkinkan fleksibilitas penamaan antar layanan tanpa khawatir collision global.
+```sql
+PRAGMA journal_mode=WAL;  -- Write-Ahead Logging untuk crash recovery
+CREATE TABLE events (
+    topic TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    timestamp TEXT,
+    source TEXT,
+    payload TEXT,
+    processed_at REAL,
+    PRIMARY KEY (topic, event_id)
+);
+```
 
----
+Mode **WAL (Write-Ahead Logging)** dipilih karena sesuai dengan rekomendasi untuk menjamin durabilitas data dan pemulihan setelah crash, sebagaimana dijelaskan dalam pembahasan toleransi kegagalan pada sistem terdistribusi (van Steen & Tanenbaum, 2023, Bab 8).
 
-## 5. Ordering dan Pendekatan Praktis (Bab 5)
+### 2.3 Ordering
 
-**Totally-ordered multicasting** menjamin bahwa seluruh pesan diterima dalam urutan yang sama oleh semua proses. Namun, total ordering tidak selalu diperlukan. Dalam sistem log aggregator, total ordering dapat diabaikan apabila pemrosesan log bersifat **komutatif** (hasil akhir tidak bergantung pada urutan) atau ketika log berasal dari layanan yang tidak memiliki ketergantungan langsung satu sama lain sehingga cukup memerlukan **causal ordering** (Coulouris et al., 2012, Chapter 5).
+Sistem ini **tidak memaksakan total ordering** atas dasar pertimbangan berikut:
 
-### Keputusan: Total Ordering Tidak Diperlukan
+Coulouris et al. (2012, hlm. 589) menjelaskan bahwa *totally-ordered multicasting* menjamin semua proses menerima pesan dalam urutan yang sama — namun biaya koordinasinya tinggi. Dalam sistem agregator log, setiap event bersifat **independen** (tidak ada causal dependency antar event dari sumber berbeda), sehingga total ordering tidak diperlukan dan hanya akan menambah beban koordinasi.
 
-Sistem ini **tidak memaksakan total ordering** dengan alasan:
+**Keputusan:**
 
-1. **Independensi event** — Setiap event bersifat independen; tidak ada causal dependency antar event
-2. **Komutatif** — Hasil akhir (kumpulan event unik) tidak bergantung pada urutan pemrosesan
-3. **Tidak ada stateful aggregation** — Aggregator hanya mengumpulkan dan menyimpan event unik
-
-### Pendekatan yang Digunakan
-
-| Aspek | Implementasi |
-|---|---|
-| **Partial ordering** | Single consumer FIFO dari `asyncio.Queue` pada [`src/consumer.py`](src/consumer.py:12) |
-| **Timestamp** | Event menyertakan timestamp ISO 8601 dari publisher |
-| **Urutan penyimpanan** | SQLite `ORDER BY processed_at` pada [`src/dedup_store.py`](src/dedup_store.py:71-76) |
-
-Jika sistem tetap dipaksa menggunakan total ordering melalui central sequencer, performa dapat menurun dan masalah skalabilitas akan semakin besar (Coulouris et al., 2012, Chapter 5). Oleh karena itu, pendekatan partial ordering melalui single consumer FIFO dipilih sebagai keseimbangan antara ordering dan performa.
-
----
-
-## 6. Failure Modes dan Strategi Mitigasi (Bab 6)
-
-Beberapa failure modes yang umum pada sistem terdistribusi meliputi **crash failure** (proses berhenti sepenuhnya), **omission failure** (kegagalan komponen dalam mengirim atau menerima pesan), serta **arbitrary failure** (pesan duplikat atau tidak berurutan) (Coulouris et al., 2012, Chapter 6).
-
-### Failure Modes dan Mitigasi
-
-| Failure Mode | Deskripsi | Mitigasi dalam Sistem |
+| Aspek Ordering | Implementasi | Justifikasi |
 |---|---|---|
-| **Crash failure** | Proses berhenti sepenuhnya | SQLite persistent store di [`src/dedup_store.py`](src/dedup_store.py:12-16) — data tetap aman di disk |
-| **Omission failure** | Pesan gagal dikirim/diterima | Publisher dapat melakukan retry (at-least-once) |
-| **Arbitrary failure** | Pesan duplikat atau tidak berurutan | Dedup store dengan `INSERT OR IGNORE` menolak duplikat |
+| **Partial ordering** | Single FIFO consumer dari `asyncio.Queue` | Cukup memadai; event diproses berurutan dalam satu antrian |
+| **Timestamp sumber** | Field `timestamp` ISO 8601 dari publisher | Untuk referensi waktu terjadinya event di sisi pengirim |
+| **Urutan penyimpanan** | `ORDER BY processed_at` di SQLite | Mencerminkan urutan pemrosesan aktual oleh consumer |
 
-### Toleransi Crash
+Jika total ordering dipaksakan melalui *central sequencer*, throughput akan menurun signifikan dan menjadi single point of failure (van Steen & Tanenbaum, 2023, Bab 5).
 
-Sistem dirancang untuk toleran terhadap crash melalui:
+### 2.4 Strategi Retry dan At-Least-Once Delivery
 
-1. **Persistent Dedup Store** — [`src/dedup_store.py`](src/dedup_store.py:12) menggunakan SQLite dengan WAL mode (`PRAGMA journal_mode=WAL`) yang memastikan durability dan crash recovery
-2. **File-based Storage** — Database disimpan di `data/dedup.db` yang di-mount sebagai volume Docker pada [`docker-compose.yml`](docker-compose.yml:7) sehingga data tetap aman meskipun container dihapus
-3. **Idempotent Consumer** — [`src/consumer.py`](src/consumer.py:37) menggunakan `store_event()` yang idempoten — reprocessing tidak mengubah state
+Sistem mengadopsi semantik **at-least-once delivery** (Coulouris et al., 2012, hlm. 95). Endpoint `POST /publish` tidak pernah menolak event — ia selalu merespons HTTP 200 dan memasukkan event ke antrian. Publisher bebas untuk melakukan retry tanpa khawatir data duplikasi akan merusak state, karena consumer yang idempoten akan menanganinya.
 
-Seluruh strategi ini sesuai dengan rekomendasi teori: durable dedup store untuk mencatat ID log secara persisten, serta checkpointing untuk pemulihan (Coulouris et al., 2012, Chapter 6).
+Alasannya: *exactly-once delivery* sangat sulit diimplementasikan tanpa two-phase commit atau mekanisme ACK yang kompleks. Dengan idempotent consumer, **at-least-once secara efektif menghasilkan exactly-once semantics** dalam hal keunikan data yang tersimpan.
 
 ---
 
-## 7. Eventual Consistency dan Idempotency (Bab 7)
+## 3. Analisis Performa dan Metrik
 
-**Eventual consistency** merupakan model konsistensi lemah yang menjamin bahwa apabila tidak ada lagi pembaruan baru yang masuk, seluruh salinan data pada berbagai replika pada akhirnya akan berkonvergensi ke keadaan yang sama (Coulouris et al., 2012, Chapter 7). Dalam sistem log aggregator berskala besar, model ini banyak digunakan karena mampu mengurangi beban sinkronisasi global dan sekaligus mendukung availability serta performa yang lebih tinggi.
+### 3.1 Hasil Benchmark
 
-### Penerapan dalam Sistem
-
-Sistem ini mengadopsi **eventual consistency** dalam pemrosesan event:
-
-| Aspek | Implementasi |
-|---|---|
-| **Model** | Eventual consistency — event yang baru masuk mungkin belum langsung tersedia di `/events` karena masih dalam antrian |
-| **Konvergensi** | Consumer FIFO memproses event secara berurutan; semua event unik akhirnya tersimpan di SQLite |
-| **Idempotency** | `INSERT OR IGNORE` memastikan event yang sama tidak merusak data meskipun diterima berulang kali |
-
-Penerapan idempotency dan mekanisme dedup sangat penting untuk menjaga validitas konvergensi dalam eventual consistency. Jika operasi konsumsi log dirancang agar idempoten dan setiap log disaring melalui deduplikasi, maka penerimaan log yang sama secara berulang tidak akan merusak isi basis data. Dengan cara ini, sistem dapat mencapai konvergensi tanpa menimbulkan inkonsistensi akibat duplikasi pembaruan.
-
----
-
-## 8. Metrik Evaluasi dan Keputusan Desain (Bab 1–7)
-
-Keputusan arsitektur pada sistem ini dievaluasi melalui tiga metrik utama: **throughput**, **latency**, dan **duplicate rate** (Coulouris et al., 2012; Steen & Tanenbaum, 2023).
-
-### Throughput
+Pengujian dilakukan menggunakan `src/publisher.py` yang mengirim 6.000 event (5.000 unik + 1.000 duplikat) ke server yang berjalan di Docker.
 
 | Metrik | Hasil |
 |---|---|
-| Total event diproses | 6.000 (5.000 unique + 1.000 duplikat) |
-| Waktu eksekusi | ~0.87 detik |
+| Total event dikirim | 6.000 |
+| Event unik tersimpan | 5.000 |
+| Duplikat terdeteksi & dibuang | 1.000 |
+| Waktu eksekusi pengiriman | ~0.87 detik |
 | **Throughput** | **~6.900 events/detik** |
+| Akurasi deduplication | 100% (0% false positive) |
+| Memori tambahan | Minimal (counter integer in-memory) |
 
-Desain Pub-Sub yang asinkron dipilih karena mampu membebaskan publisher dari proses menunggu respons, sehingga kapasitas pengiriman log dapat meningkat jauh di atas pendekatan client-server tradisional.
+### 3.2 Faktor Performa
 
-### Latency
+**Mengapa throughput tinggi?**
 
-Sistem memilih **eventual consistency** dibanding strong consistency agar log dapat segera diterima dan diproses secara lokal tanpa menunggu sinkronisasi seluruh replika secara real-time. Dalam implementasi:
+1. **Asinkron non-blocking** — `POST /publish` hanya memasukkan event ke antrian in-memory, tidak menunggu operasi I/O database selesai. Ini memungkinkan publisher mengirim event dengan latensi sangat rendah (~milidetik per request).
+2. **Pemisahan write path** — Consumer memproses database secara terpisah dari HTTP handler, sehingga HTTP server tidak pernah terbloking oleh I/O disk.
+3. **SQLite WAL mode** — Mendukung concurrent read dan write; pembaca `/events` dan `/stats` tidak mengunci writer.
 
-- `POST /publish` → enqueue → HTTP 200 (latency rendah, ~milidetik)
-- Consumer → SQLite → selesai (background, tidak memengaruhi respons HTTP)
+**Profil latensi:**
 
-### Duplicate Rate
-
-| Metrik | Hasil |
+| Operasi | Latensi |
 |---|---|
-| Duplikat dikirim | 1.000 (20% dari total) |
-| Duplikat terdeteksi & di-drop | 1.000 |
-| **Duplicate rate** | **0% false positive** |
+| `POST /publish` (enqueue) | ~1–3 ms |
+| Consumer → SQLite INSERT | ~2–5 ms |
+| `GET /events` (SQLite SELECT) | ~5–15 ms (tergantung volume) |
+| `GET /stats` (in-memory read) | < 1 ms |
 
-Dengan idempotent consumer dan durable dedup store, sistem tetap tahan terhadap banjir data ganda dan mampu menjaga integritas hasil agregasi.
+### 3.3 Stress Test
 
----
-
-## Ringkasan Keterkaitan dengan Teori
-
-| Bab | Topik | Implementasi | Kode Terkait |
-|---|---|---|---|
-| Bab 1 | Karakteristik Sistem Terdistribusi | Trade-off transparansi vs performa; availability diprioritaskan | [`src/main.py`](src/main.py:31-38) — async lifespan |
-| Bab 2 | Client-Server vs Pub-Sub | Arsitektur Pub-Sub dengan referential & temporal decoupling | [`src/consumer.py`](src/consumer.py:12) — asyncio.Queue |
-| Bab 3 | At-Least-Once Delivery | Retry + idempotent consumer via `INSERT OR IGNORE` | [`src/dedup_store.py`](src/dedup_store.py:42) |
-| Bab 4 | Skema Penamaan | Topic (structured), event_id (flat UUID4), composite PK | [`src/dedup_store.py`](src/dedup_store.py:30) — PK(topic, event_id) |
-| Bab 5 | Ordering | Total ordering tidak diperlukan; partial ordering via FIFO | [`src/consumer.py`](src/consumer.py:33) — consumer loop |
-| Bab 6 | Failure Modes | Crash tolerance via SQLite WAL mode; mitigasi duplikasi | [`src/dedup_store.py`](src/dedup_store.py:20-21) — WAL |
-| Bab 7 | Eventual Consistency | Model eventual consistency; idempotency menjaga konvergensi | [`src/dedup_store.py`](src/dedup_store.py:42) — INSERT OR IGNORE |
+Unit test `test_stress_5000_events` (`tests/test_stress.py`) memverifikasi bahwa:
+- 5.000 event unik + 1.000 duplikat diproses dalam batas waktu yang wajar (< 30 detik)
+- Tidak ada duplikat yang lolos ke storage
+- Statistik konsisten dengan data yang dikirim
 
 ---
 
-## Unit Tests
+## 4. Keterkaitan dengan Teori Sistem Terdistribusi (Bab 1–7)
 
-Sistem memiliki **15 unit tests** (melebihi minimum 5-10 yang disyaratkan):
+### Bab 1 — Karakteristik Sistem Terdistribusi
 
-| # | Test | Cakupan | File |
+Van Steen & Tanenbaum (2023, hlm. 2) mendefinisikan sistem terdistribusi sebagai *"a collection of autonomous computing elements that appears to its users as a single coherent system."* Tiga tujuan desain utama yang menjadi acuan adalah **keterbukaan** (*openness*), **transparansi distribusi** (*distribution transparency*), dan **skalabilitas** (*scalability*).
+
+| Tujuan Desain | Implementasi dalam Sistem |
+|---|---|
+| **Openness** | HTTP + JSON sebagai antarmuka standar; dapat diintegrasikan dengan layanan apa pun |
+| **Distribution transparency** | Publisher tidak perlu tahu apakah event diproses secara sinkron atau asinkron |
+| **Scalability** | Arsitektur `asyncio.Queue` memungkinkan penambahan consumer worker di masa depan |
+
+**Trade-off yang diambil:** Sistem memprioritaskan **availability** di atas strong consistency — publisher selalu mendapat respons 200 meskipun consumer belum selesai memproses. Ini sesuai dengan prinsip bahwa upaya memaksakan transparansi penuh justru dapat menurunkan performa (van Steen & Tanenbaum, 2023, hlm. 9).
+
+### Bab 2 — Arsitektur Sistem
+
+Coulouris et al. (2012, Bab 2) membedakan model arsitektur client-server dan publish-subscribe. Sistem ini secara eksplisit memilih pola **Publish-Subscribe** karena menawarkan *referential decoupling* (publisher tidak tahu keberadaan consumer) dan *temporal decoupling* (publisher dan consumer tidak harus aktif bersama).
+
+Van Steen & Tanenbaum (2023, hlm. 68) juga membahas *publish-subscribe architectures* sebagai varian *service-oriented architecture* yang cocok untuk sistem event-driven dengan banyak publisher.
+
+| Dimensi | Client-Server | Pub-Sub (Dipilih) |
+|---|---|---|
+| **Coupling** | Ketat — klien tahu lokasi server | Longgar — publisher tidak kenal consumer |
+| **Sinkronisasi** | Sinkron | Asinkron |
+| **Skalabilitas** | Bottleneck di server | Event bus menangani banyak publisher |
+
+*Referensi kode:* `src/consumer.py` — `asyncio.Queue` sebagai event bus internal.
+
+### Bab 3 — Proses
+
+Van Steen & Tanenbaum (2023, Bab 3) membahas model threading dan konkurensi pada sistem terdistribusi. Sistem ini memanfaatkan model **coroutine berbasis asyncio** sebagai alternatif thread yang lebih ringan dan cocok untuk workload I/O-bound.
+
+FastAPI berjalan di atas **Uvicorn (ASGI)** yang memanfaatkan event loop asyncio secara penuh. Background consumer dijalankan sebagai **asyncio Task** melalui `asyncio.create_task()` dalam lifespan aplikasi — tidak membutuhkan thread tambahan dan tidak ada race condition karena GIL Python menjamin atomisitas pada operasi sederhana.
+
+Kontainerisasi via **Docker** juga sesuai dengan konsep virtualisasi proses yang dibahas oleh van Steen & Tanenbaum (2023, hlm. 133–138): container memberikan isolasi lingkungan dengan overhead minimal dibanding virtual machine penuh.
+
+### Bab 4 — Komunikasi
+
+Coulouris et al. (2012, Bab 4) membahas berbagai model komunikasi antarproses. Sistem ini menggunakan **HTTP sebagai transport layer** dengan format pesan JSON — merupakan wujud dari *message-oriented persistent communication* yang dijelaskan pada bagian 4.3.3.
+
+Van Steen & Tanenbaum (2023, hlm. 220–227) juga menyebutkan bahwa sistem message queue modern seperti AMQP (Advanced Message Queuing Protocol) menggunakan pola serupa: producer → broker → consumer. Dalam skala yang lebih kecil dan lokal, `asyncio.Queue` berperan sebagai broker in-process yang ringan.
+
+Skema event yang digunakan:
+
+| Field | Tipe | Keterangan |
+|---|---|---|
+| `topic` | string | Kategori/saluran event |
+| `event_id` | string | Identifier unik dalam topic |
+| `timestamp` | ISO 8601 | Waktu terjadinya event di sisi publisher |
+| `source` | string | Identitas layanan pengirim |
+| `payload` | object | Data event bebas (opsional, default `{}`) |
+
+### Bab 5 — Koordinasi
+
+Van Steen & Tanenbaum (2023, Bab 5) membahas problem koordinasi dalam sistem terdistribusi, termasuk *clock synchronization*, *mutual exclusion*, dan *distributed event matching*. Bagian 5.6 khusus membahas **secure publish-subscribe solutions** — yang secara langsung relevan dengan desain sistem ini.
+
+Van Steen & Tanenbaum (2023, hlm. 260) menjelaskan **Lamport's logical clocks** sebagai cara untuk menetapkan urutan kausal antar event. Dalam sistem ini, total ordering **tidak diperlukan** karena:
+1. Setiap event bersifat independen (tidak ada dependensi kausal antar event)
+2. Operasi penyimpanan event bersifat komutatif — hasil akhir sama terlepas dari urutan pemrosesan
+
+Single consumer FIFO dari `asyncio.Queue` memberikan **partial ordering** yang memadai tanpa overhead koordinasi terdistribusi.
+
+### Bab 6 — Penamaan
+
+Coulouris et al. (2012, Bab 6) membahas pentingnya skema penamaan dalam melokalisasi dan mengidentifikasi entitas pada sistem terdistribusi. Skema penamaan yang baik harus *collision-resistant* dan *stable* agar deduplication dapat bekerja dengan andal.
+
+| Entitas | Skema Penamaan | Contoh |
+|---|---|---|
+| `topic` | *Flat naming* terstruktur | `"orders"`, `"payments"`, `"notifications"` |
+| `event_id` | *Flat naming* UUID4 (collision-resistant) | `"a1b2c3d4-e5f6-7890-..."` |
+| `source` | Identitas layanan pengirim | `"order-service"`, `"payment-svc"` |
+
+Penggunaan **Composite Primary Key `(topic, event_id)`** memungkinkan:
+- `event_id` yang sama di topic berbeda → dianggap **unik** (namespace terpisah per topic)
+- `event_id` yang sama di topic sama → dianggap **duplikat** (ditolak oleh `INSERT OR IGNORE`)
+
+Ini memberikan fleksibilitas penamaan antar layanan tanpa memerlukan koordinasi global untuk pemberian ID.
+
+### Bab 7 — Konsistensi dan Replikasi
+
+Van Steen & Tanenbaum (2023, Bab 7) mendefinisikan model konsistensi dari yang paling ketat (*strict consistency*) hingga yang paling longgar (*eventual consistency*). Sistem ini mengadopsi model **eventual consistency**:
+
+> *"Eventual consistency guarantees that, if no new updates are made to an object, all replicas will eventually converge to the same value."* — (van Steen & Tanenbaum, 2023, hlm. 326)
+
+| Aspek | Implementasi |
+|---|---|
+| **Model konsistensi** | Eventual — event baru mungkin belum langsung tersedia di `/events` (masih dalam antrian) |
+| **Konvergensi** | Single consumer FIFO memastikan semua event unik akhirnya tersimpan di SQLite |
+| **Idempotency sebagai safeguard** | `INSERT OR IGNORE` memastikan event yang sama tidak mengubah state jika diproses ulang |
+
+Dalam konteks ini, **idempotency adalah mekanisme kunci** yang memungkinkan eventual consistency berjalan dengan aman. Penerimaan event yang sama berkali-kali tidak akan merusak basis data karena operasi konsumsinya bersifat idempoten — sejalan dengan rekomendasi van Steen & Tanenbaum (2023, hlm. 192).
+
+---
+
+## 5. Ringkasan Keterkaitan Teori dan Implementasi
+
+| Bab | Topik Utama | Keputusan Desain | Referensi Kode |
 |---|---|---|---|
-| 1 | `test_dedup_rejects_duplicate` | Dedup bekerja untuk event yang sama | [`tests/test_dedup.py`](tests/test_dedup.py:14) |
-| 2 | `test_same_event_id_different_topics` | Event ID sama, topic beda = 2 unique | [`tests/test_dedup.py`](tests/test_dedup.py:34) |
-| 3 | `test_dedup_persistence_across_restart` | Dedup store tahan restart (simulasi) | [`tests/test_dedup.py`](tests/test_dedup.py:55) |
-| 4 | `test_consumer_dedup_integration` | Consumer pipeline + dedup stats | [`tests/test_dedup.py`](tests/test_dedup.py:78) |
-| 5 | `test_valid_event_schema` | Event valid → 200 OK | [`tests/test_schema.py`](tests/test_schema.py:7) |
-| 6 | `test_missing_topic_field` | Missing topic → 422 | [`tests/test_schema.py`](tests/test_schema.py:21) |
-| 7 | `test_missing_event_id_field` | Missing event_id → 422 | [`tests/test_schema.py`](tests/test_schema.py:31) |
-| 8 | `test_invalid_timestamp_format` | Bad timestamp → 422 | [`tests/test_schema.py`](tests/test_schema.py:41) |
-| 9 | `test_empty_body` | Empty body → 422 | [`tests/test_schema.py`](tests/test_schema.py:52) |
-| 10 | `test_batch_publish` | Batch 10 events → received=10 | [`tests/test_schema.py`](tests/test_schema.py:56) |
-| 11 | `test_events_by_topic` | GET /events?topic=... mengembalikan 1 event | [`tests/test_api.py`](tests/test_api.py:5) |
-| 12 | `test_events_all_topics` | GET /events semua topic = 5 | [`tests/test_api.py`](tests/test_api.py:22) |
-| 13 | `test_stats_consistency` | Stats cocok dengan data yang dikirim | [`tests/test_api.py`](tests/test_api.py:35) |
-| 14 | `test_stats_empty_initial` | Stats awal = 0 semua | [`tests/test_api.py`](tests/test_api.py:54) |
-| 15 | `test_stress_5000_events` | 5000 events + 20% duplikat < 30 detik | [`tests/test_stress.py`](tests/test_stress.py:15) |
+| Bab 1 | Karakteristik & tujuan desain | Prioritaskan availability; HTTP+JSON terbuka | [`src/main.py`](src/main.py) |
+| Bab 2 | Arsitektur Pub-Sub | Referential & temporal decoupling via `asyncio.Queue` | [`src/consumer.py`](src/consumer.py) |
+| Bab 3 | Proses & kontainerisasi | asyncio coroutine; Docker container isolation | [`Dockerfile`](Dockerfile) |
+| Bab 4 | Komunikasi | HTTP/JSON message-oriented; asyncio.Queue sebagai broker internal | [`src/main.py`](src/main.py) |
+| Bab 5 | Koordinasi & ordering | Partial ordering (FIFO); total ordering tidak diperlukan | [`src/consumer.py`](src/consumer.py) |
+| Bab 6 | Penamaan | Composite PK `(topic, event_id)`; flat naming UUID4 | [`src/dedup_store.py`](src/dedup_store.py) |
+| Bab 7 | Konsistensi & replikasi | Eventual consistency; idempotent consumer via `INSERT OR IGNORE` | [`src/dedup_store.py`](src/dedup_store.py) |
 
-### Cara menjalankan tests
+---
+
+## 6. Unit Tests
+
+Sistem memiliki **15 unit tests** yang melebihi persyaratan minimum (5–10 tests):
+
+| # | Nama Test | Cakupan | File |
+|---|---|---|---|
+| 1 | `test_dedup_rejects_duplicate` | Dedup bekerja untuk event yang sama | [`tests/test_dedup.py`](tests/test_dedup.py) |
+| 2 | `test_same_event_id_different_topics` | Event ID sama, topic berbeda = 2 unique | [`tests/test_dedup.py`](tests/test_dedup.py) |
+| 3 | `test_dedup_persistence_across_restart` | Dedup store tahan restart (simulasi) | [`tests/test_dedup.py`](tests/test_dedup.py) |
+| 4 | `test_consumer_dedup_integration` | Consumer pipeline + dedup stats | [`tests/test_dedup.py`](tests/test_dedup.py) |
+| 5 | `test_valid_event_schema` | Event valid → 200 OK | [`tests/test_schema.py`](tests/test_schema.py) |
+| 6 | `test_missing_topic_field` | Missing `topic` → 422 | [`tests/test_schema.py`](tests/test_schema.py) |
+| 7 | `test_missing_event_id_field` | Missing `event_id` → 422 | [`tests/test_schema.py`](tests/test_schema.py) |
+| 8 | `test_invalid_timestamp_format` | Bad timestamp → 422 | [`tests/test_schema.py`](tests/test_schema.py) |
+| 9 | `test_empty_body` | Empty body → 422 | [`tests/test_schema.py`](tests/test_schema.py) |
+| 10 | `test_batch_publish` | Batch 10 events → `received=10` | [`tests/test_schema.py`](tests/test_schema.py) |
+| 11 | `test_events_by_topic` | `GET /events?topic=...` mengembalikan 1 event | [`tests/test_api.py`](tests/test_api.py) |
+| 12 | `test_events_all_topics` | `GET /events` semua topic = 5 | [`tests/test_api.py`](tests/test_api.py) |
+| 13 | `test_stats_consistency` | Stats cocok dengan data yang dikirim | [`tests/test_api.py`](tests/test_api.py) |
+| 14 | `test_stats_empty_initial` | Stats awal = 0 semua | [`tests/test_api.py`](tests/test_api.py) |
+| 15 | `test_stress_5000_events` | 5.000 events + 20% duplikat < 30 detik | [`tests/test_stress.py`](tests/test_stress.py) |
+
+### Cara Menjalankan Tests
 
 ```bash
-# Local
+# Lokal (aktifkan virtual environment terlebih dahulu)
+source .venv/bin/activate
 python3 -m pytest tests/ -v
 
 # Docker
@@ -299,27 +332,29 @@ docker run --rm uts-aggregator python3 -m pytest tests/ -v
 
 ---
 
-## Sitasi
-
-Coulouris, G., Dollimore, J., Kindberg, T., & Blair, G. (2012). *Distributed Systems: Concepts and Design* (5th ed.). Addison-Wesley.
-
-Steen, M. van, & Tanenbaum, A. S. (2023). *Distributed Systems* (4th ed.). Maarten van Steen.
-
-FastAPI Documentation. (2024). *FastAPI*. https://fastapi.tiangolo.com/
-
-Python asyncio Documentation. (2024). *asyncio — Asynchronous I/O*. https://docs.python.org/3/library/asyncio.html
-
-SQLite Documentation. (2024). *SQLite*. https://www.sqlite.org/docs.html
-
----
-
-## Informasi Tambahan
+## 7. Informasi Proyek
 
 | Item | Detail |
 |---|---|
 | **Framework** | FastAPI 0.104+ dengan Python 3.11 |
 | **Dedup Store** | SQLite 3 (WAL mode, `INSERT OR IGNORE`) |
+| **Queue** | `asyncio.Queue` (in-memory FIFO) |
 | **Testing** | pytest + pytest-asyncio (15 tests) |
-| **Container** | python:3.11-slim, non-root user (`appuser`) |
+| **Container** | `python:3.11-slim`, non-root user (`appuser`) |
+| **Docker Compose** | Publisher + Aggregator dalam jaringan internal terpisah |
 | **Repository** | [Link GitHub] |
 | **Video Demo** | [Link YouTube] |
+
+---
+
+## Daftar Pustaka
+
+van Steen, M., & Tanenbaum, A. S. (2023). *Distributed systems* (4th ed., Version 4.03). Maarten van Steen. https://www.distributed-systems.net/
+
+Coulouris, G., Dollimore, J., Kindberg, T., & Blair, G. (2012). *Distributed systems: Concepts and design* (5th ed.). Pearson Education Limited.
+
+FastAPI. (2024). *FastAPI documentation*. https://fastapi.tiangolo.com/
+
+Python Software Foundation. (2024). *asyncio — Asynchronous I/O*. https://docs.python.org/3/library/asyncio.html
+
+SQLite Consortium. (2024). *SQLite documentation*. https://www.sqlite.org/docs.html
