@@ -349,9 +349,9 @@ docker run --rm uts-aggregator python3 -m pytest tests/ -v
 
 ## Daftar Pustaka
 
-van Steen, M., & Tanenbaum, A. S. (2023). *Distributed systems* (4th ed., Version 4.03). Maarten van Steen. https://www.distributed-systems.net/
+van Steen, M., & Tanenbaum, A. S. (2023). *Distributed systems* (Edisi ke-4, Versi 4.03). Maarten van Steen. ISBN: 978-90-815406-4-3. 
 
-Coulouris, G., Dollimore, J., Kindberg, T., & Blair, G. (2012). *Distributed systems: Concepts and design* (5th ed.). Pearson Education Limited.
+Coulouris, G., Dollimore, J., Kindberg, T., & Blair, G. (2012). *Distributed systems: Concepts and design* (Edisi ke-5). Pearson Education Limited. ISBN: 978-1-447-93017-4.
 
 FastAPI. (2024). *FastAPI documentation*. https://fastapi.tiangolo.com/
 
