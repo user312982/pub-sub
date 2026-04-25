@@ -6,25 +6,51 @@ Sistem aggregator event berbasis Python (FastAPI + asyncio) yang menerima event 
 
 ### Arsitektur Sistem
 
-```
-┌─────────────┐     POST /publish    ┌──────────────────┐
-│  Publisher  │ ──────────────────►  │   FastAPI App    │
-│ (curl/test) │                      │   (HTTP Server)  │
-└─────────────┘                      └────────┬─────────┘
-                                              │
-                                       asyncio.Queue
-                                              │
-                                      ┌───────▼────────┐
-                                      │   Consumer     │
-                                      │  (background)  │
-                                      └───┬─────────┬──┘
-                                          │         │
-                                   INSERT OR IGNORE │
-                                          │         │
-                                    ┌─────▼──┐  ┌──▼──────────┐
-                                    │ SQLite │  │ Stats       │
-                                    │ (dedup)│  │ (in-memory) │
-                                    └────────┘  └─────────────┘
+```mermaid
+graph TB
+    subgraph Client_Layer["Client Layer"]
+        PUB["Publisher<br/>(HTTP Client/curl)"]
+    end
+
+    subgraph Docker_Container["Docker Container"]
+        subgraph API_Layer["API Layer"]
+            POST["/publish<br/>(POST)"]
+            GET_EV["/events<br/>(GET)"]
+            GET_ST["/stats<br/>(GET)"]
+        end
+
+        subgraph Processing_Layer["Processing Layer"]
+            QUEUE[["asyncio.Queue<br/>(In-Memory Buffer)"]]
+            WORKER["Background Consumer<br/>(Idempotent)"]
+            STATS["Stats Tracker<br/>(In-Memory)"]
+        end
+
+        subgraph Storage_Layer["Storage Layer"]
+            DB[("SQLite<br/>(Dedup Store)<br/>PK(topic, event_id)")]
+        end
+    end
+
+    PUB -->|"HTTP POST"| POST
+    PUB -.->|"HTTP GET"| GET_EV
+    PUB -.->|"HTTP GET"| GET_ST
+
+    POST -->|"enqueue"| QUEUE
+    QUEUE -->|"dequeue"| WORKER
+    
+    WORKER -->|"INSERT OR IGNORE"| DB
+    WORKER -->|"Update"| STATS
+    
+    DB -->|"SELECT"| GET_EV
+    STATS -.->|"Read"| GET_ST
+
+    style PUB fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style POST fill:#50b86c,stroke:#2d7a3e,color:#fff
+    style GET_EV fill:#50b86c,stroke:#2d7a3e,color:#fff
+    style GET_ST fill:#50b86c,stroke:#2d7a3e,color:#fff
+    style QUEUE fill:#f5a623,stroke:#c7841a,color:#fff
+    style WORKER fill:#e74c3c,stroke:#a93226,color:#fff
+    style STATS fill:#e67e22,stroke:#ba4a00,color:#fff
+    style DB fill:#9b59b6,stroke:#6c3483,color:#fff
 ```
 
 ---
