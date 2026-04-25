@@ -342,8 +342,7 @@ docker run --rm uts-aggregator python3 -m pytest tests/ -v
 | **Testing** | pytest + pytest-asyncio (15 tests) |
 | **Container** | `python:3.11-slim`, non-root user (`appuser`) |
 | **Docker Compose** | Publisher + Aggregator dalam jaringan internal terpisah |
-| **Repository** | [Link GitHub] |
-| **Video Demo** | [Link YouTube] |
+| **Video Demo** | [https://youtu.be/X4D96qp1PNc?si=wUcfuQ_pepuwjiYy] |
 
 ---
 
