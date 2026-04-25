@@ -145,6 +145,14 @@ Sistem mengadopsi semantik **at-least-once delivery** (Coulouris et al., 2012, h
 
 Alasannya: *exactly-once delivery* sangat sulit diimplementasikan tanpa two-phase commit atau mekanisme ACK yang kompleks. Dengan idempotent consumer, **at-least-once secara efektif menghasilkan exactly-once semantics** dalam hal keunikan data yang tersimpan.
 
+### 2.5 Metrik Evaluasi Sistem Berdasarkan Keputusan Desain
+
+Keputusan arsitektur yang diambil (idempotency, dedup store, ordering, retry) pada sistem *event aggregator* tugas ini dievaluasi secara tajam melalui tiga metrik teori sistem terdistribusi, yaitu *throughput, latency,* dan *duplicate rate*. 
+
+1. **Throughput** menunjukkan jumlah kejadian log yang diproses dalam durasi waktu tertentu. Desain Pub-Sub yang digawangi sistem asinkron diimplementasikan melalui `asyncio.Queue` (FastAPI) dan *background consumer*. Keputusan ini membebaskan pihak pengirim dari keharusan menunggu *response time* database I/O, sehingga kapasitas melonjak tinggi ketimbang koneksi klien-server biasa. Terbukti dari hasil *stress test*, sistem dapat mendulang kecepatan impresif hingga **~6.900 events/detik** tanpa mengalami antrian penuh.
+2. **Latency** mengukur jeda waktu dari pengiriman beban hingga kode merespon balasan awal. Karena arsitektur ini melepas aturan *strong consistency* berlapis, respons HTTP memakan jeda latensi super ringan (hanya **1–3 milidetik**). Sistem berlapang dada memberikan respon sukses lebih awal dengan asas *eventual consistency*, sedangkan penyimpanan ke SQLite Store didelegasikan ke pemrosesan background. Semuanya berjalan *real-time* tanpa antrian tunggu TCP.
+3. **Duplicate rate** mencerminkan persentase log duplikat yang disuntikkan publisher ke sistem. Konsekuensi dari memprioritaskan toleransi kegagalan via *retry* (pola *at-least-once*) adalah masuknya data kembar di jalur komunikasi. Kondisi ini secara harfiah kita uji pada skala batas minimum (>20% pengiriman ganda disimulasikan). Kelemahan ini sukses dicegah secara murni oleh *idempotent consumer*. SQLite Store yang ditugaskan dengan `INSERT OR IGNORE` dan *Composite Key* menggaransi mutlak 100% data kembar yang repetitif ditelantarkan (didudukkan pada angka `duplicate_dropped`). Sistem stabil merawat keutuhan event meskipun diserang replikasi pesan massal.
+
 ---
 
 ## 3. Analisis Performa dan Metrik

@@ -59,11 +59,18 @@ Menampilkan metrik sistem: `received`, `unique_processed`, `duplicate_dropped`, 
 
 ---
 
-##  Testing
-Jalankan unit tests (15 Passed):
+## Testing
+
+Jalankan 15 unit tests (semua lulus/PASSED) secara terisolasi via Docker:
 ```bash
 docker run --rm uts-aggregator python3 -m pytest tests/ -v
 ```
+
+**Cakupan Pengujian:**
+1. **Test API (`test_api.py`)**: Validasi respons konsisten dari `/stats` dan `/events`.
+2. **Test Deduplikasi (`test_dedup.py`)**: Menguji keberhasilan pencegahan data ganda (idempotency) dan ketahanan persistensi data setelah sistem dimatikan (restart).
+3. **Test Skema (`test_schema.py`)**: Memastikan sistem otomatis menolak payload rusak (tanpa `topic`/`event_id`, tipe tanggal salah) dengan HTTP 422.
+4. **Test Stress (`test_stress.py`)**: Menguji kemampuan pemrosesan di atas 5.000 event (dengan >=20% duplikat) dalam satu tarikan.
 
 ---
 
