@@ -1,6 +1,18 @@
 # Event Aggregator — UTS Pub-Sub System
 
-Layanan agregasi event berbasis FastAPI yang mendukung **Idempotent Deduplication** dan **Persistent Storage** menggunakan SQLite.
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688.svg)](https://fastapi.tiangolo.com)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
+[![Testing](https://img.shields.io/badge/Tests-15%20Passed-brightgreen.svg)](tests/)
+
+Layanan aggregator event berkinerja tinggi yang dirancang untuk menangani beban ribuan event secara asinkron dengan fitur de-duplikasi otomatis (Idempotency).
+
+### 🛠 Core Technologies
+- **Backend:** Python 3.11 + FastAPI (Async IO)
+- **Database:** SQLite 3 (WAL Mode) untuk persistensi lokal
+- **Reliability:** At-least-once delivery dengan Intelligent Deduplication
+- **Testing:** 15 Automated Unit Tests (Pytest)
+- **Isolation:** Containerized via Docker & Docker Compose
 
 ---
 
