@@ -24,6 +24,45 @@ docker compose up -d --build
 ```
 *Service publisher otomatis mengirim 5000 event untuk pengujian.*
 
+## Panduan Penggunaan (Tutor Demo)
+
+Setelah container di atas berjalan, Anda dapat berinteraksi dan mencoba sistem seperti skrip demo melalui perintah berikut:
+
+### 1. Pengiriman Event Biasa
+```bash
+# Kirim event normal tunggal
+docker compose exec publisher python3 src/publisher.py push_normal_event
+
+# Kirim batch event sekaligus
+docker compose exec publisher python3 src/publisher.py push_event_batch
+```
+
+### 2. Pengecekan Sistem
+```bash
+# Lihat ringkasan metrik (received, processed, dropped)
+docker compose exec publisher python3 src/publisher.py check_stats
+
+# Lihat daftar rekap event unik yang tersimpan (Topic: demo)
+docker compose exec publisher python3 src/publisher.py check_events
+```
+
+### 3. Simulasi Deduplikasi (Idempotency)
+```bash
+# Kirim event dengan ID "demo-id-777" sebanyak 2x secepat mungkin
+docker compose exec publisher python3 src/publisher.py push_redundant_event
+
+# Cek stats lagi: angka duplicate_dropped pasti bertambah 1!
+docker compose exec publisher python3 src/publisher.py check_stats
+```
+
+### 4. Skala Produksi (Stress Test)
+```bash
+# Bom server dengan 5000 event (4000 unik + 1000 duplikat) dalam batch 1000
+docker compose exec publisher python3 src/publisher.py run_performance_benchmark
+```
+
+---
+
 ### Docker Manual
 ```bash
 # Build image
