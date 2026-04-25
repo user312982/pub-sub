@@ -18,7 +18,9 @@ services:
     depends_on:
       aggregator:
         condition: service_healthy
-    command: ["python3", "-m", "src.publisher", "http://aggregator:8080", "5000", "0.2"]
+    command: ["tail", "-f", "/dev/null"]
+    environment:
+      - API_URL=http://aggregator:8080
     networks:
       - internal
 
