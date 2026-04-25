@@ -7,9 +7,8 @@ Layanan agregasi event berbasis FastAPI yang mendukung **Idempotent Deduplicatio
 ## Quick Start
 
 ### Docker Compose (Rekomendasi)
-Menjalankan Aggregator dan Publisher secara otomatis:
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 *Service publisher otomatis mengirim 5000 event untuk pengujian.*
 
