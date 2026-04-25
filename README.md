@@ -100,111 +100,57 @@ A high-performance **event aggregation service** built with Python and FastAPI. 
 - [Docker](https://docs.docker.com/get-docker/) installed on your machine
 - (Optional) Python 3.11+ for local development
 
-### 🚀 Recommended: Docker Compose (Full Demo)
+### Docker Compose (Direkomendasikan)
 
-This is the **recommended way to run** the project for review or demonstration. It starts both services and simulates the full workflow automatically.
+Menjalankan dua service sekaligus: aggregator dan publisher yang secara otomatis mengirim 6.000 events.
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/uts-aggregator.git
-cd uts-aggregator
-
-# Build & start all services
 docker compose up --build
 ```
 
-**What happens automatically:**
+Setelah berjalan, akses endpoint berikut di terminal lain:
 
-```
-Step 1: aggregator service starts → health check every 5s
-Step 2: publisher service starts (after aggregator is healthy)
-Step 3: Publisher sends 6,000 events (5,000 unique + 1,000 duplicates)
-Step 4: Console output shows real-time progress
-Step 5: Publisher exits, aggregator continues running
-```
-
-**Expected console output:**
-```
-aggregator-1  | INFO:     Started server on 0.0.0.0:8080
-publisher-1   | Generating 6000 events (5000 unique + 1000 duplicates)...
-publisher-1   | Sending 6000 events...
-publisher-1   |   1000/6000 events (1245/s)
-publisher-1   |   2000/6000 events (1890/s)
-publisher-1   |   ...
-publisher-1   | Sent 6000 events in 0.87s (6896 events/s)
-publisher-1   | Stats: {"received":6000, "unique_processed":5000, "duplicate_dropped":1000, ...}
-publisher-1   | Unique events stored: 5000
-```
-
-**Verify the results in another terminal:**
 ```bash
-# Check real-time statistics
 curl http://localhost:8080/stats
-
-# Query processed events by topic
-curl http://localhost:8080/events?topic=orders
-
-# Query all events
 curl http://localhost:8080/events
-
-# Interactive API documentation
-open http://localhost:8080/docs
+curl http://localhost:8080/events?topic=orders
 ```
 
-**Stop all services:**
+Untuk menghentikan:
+
 ```bash
 docker compose down
 ```
 
 ---
 
-### 📦 Option 2: Docker Only (Single Service)
-
-Run just the aggregator without the automated publisher. Useful for manual API testing.
+### Docker (Aggregator Saja)
 
 ```bash
-# Build the image
 docker build -t uts-aggregator .
-
-# Run the container (aggregator only)
 docker run -p 8080:8080 uts-aggregator
 ```
 
-Then send events manually:
-```bash
-# Single event
-curl -X POST http://localhost:8080/publish \
-  -H "Content-Type: application/json" \
-  -d '{"topic":"orders","event_id":"ord-001","timestamp":"2024-01-01T00:00:00Z","source":"order-svc","payload":{"order_id":123}}'
+Kirim event secara manual setelah server berjalan:
 
-# Batch events
+```bash
 curl -X POST http://localhost:8080/publish \
   -H "Content-Type: application/json" \
-  -d '[{"topic":"orders","event_id":"ord-001","timestamp":"2024-01-01T00:00:00Z","source":"svc","payload":{}}]'
+  -d '{"topic":"orders","event_id":"ord-001","timestamp":"2024-01-01T00:00:00Z","source":"order-svc","payload":{}}'
 ```
 
 ---
 
-### 🛠️ Option 3: Local Development (No Docker)
+### Lokal (Tanpa Docker)
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/uts-aggregator.git
-cd uts-aggregator
-
-# Create and activate virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Start the server
 uvicorn src.main:app --reload --port 8080
 ```
 
-The server will be available at `http://localhost:8080`.
-Interactive API docs at `http://localhost:8080/docs`.
+Server akan berjalan di `http://localhost:8080`.
 
 ---
 
@@ -373,33 +319,23 @@ uts-aggregator/
 
 ## Testing
 
-The project includes **15 unit tests** covering all functional areas.
-
-### Run tests locally
+Proyek ini memiliki **15 unit tests** yang mencakup semua area fungsional.
 
 ```bash
-# Activate virtual environment first
+# Lokal
 source .venv/bin/activate
-
-# Run all tests
 python3 -m pytest tests/ -v
-```
 
-### Run tests in Docker
-
-```bash
-docker build -t uts-aggregator .
+# Docker
 docker run --rm uts-aggregator python3 -m pytest tests/ -v
 ```
 
-### Test Coverage
-
-| Test File | Tests | Coverage Area |
-|-----------|-------|---------------|
-| `test_dedup.py` | 4 | Duplicate rejection, same-ID-different-topic, persistence after restart, consumer integration |
-| `test_schema.py` | 6 | Valid schema, missing fields, invalid timestamp, empty body, batch publish |
-| `test_api.py` | 4 | Events endpoint (by topic, all), stats consistency, initial empty state |
-| `test_stress.py` | 1 | Performance: 5,000 unique + 1,000 duplicates in under 30 seconds |
+| File | Tests | Cakupan |
+|------|-------|---------|
+| `test_dedup.py` | 4 | Deduplication, persistence, consumer integration |
+| `test_schema.py` | 6 | Validasi skema event, missing fields, batch |
+| `test_api.py` | 4 | Endpoint `/events` dan `/stats` |
+| `test_stress.py` | 1 | 5.000 event unik + 1.000 duplikat < 30 detik |
 
 ---
 
